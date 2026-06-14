@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cyber-black: #030712;
+  --color-cyber-dark: #0a0f1e;
+  --color-cyber-panel: #0d1424;
+  --color-cyber-border: #1a2744;
+  --color-cyber-border-bright: #1e3a5f;
+  --color-neon-green: #00ff88;
+  --color-neon-green-dim: #00cc6a;
+  --color-neon-red: #ff2d55;
+  --color-neon-red-dim: #cc2244;
+  --color-neon-blue: #00d4ff;
+  --color-neon-blue-dim: #0099cc;
+  --color-neon-yellow: #ffd700;
+  --color-text-primary: #e2e8f0;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #334155;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: #030712;
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* React Flow overrides */
+.react-flow__background {
+  background-color: #0a0f1e !important;
+}
+
+.react-flow__controls {
+  background: #0d1424 !important;
+  border: 1px solid #1a2744 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.05) !important;
+}
+
+.react-flow__controls-button {
+  background: #0d1424 !important;
+  border-bottom: 1px solid #1a2744 !important;
+  color: #64748b !important;
+  fill: #64748b !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #1a2744 !important;
+  fill: #00ff88 !important;
+}
+
+.react-flow__minimap {
+  background: #0d1424 !important;
+  border: 1px solid #1a2744 !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0f1e;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a2744;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff88;
+}
+
+/* Glow animation */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(0, 255, 136, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(0, 255, 136, 0.6); }
+}
+
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  93% { opacity: 0.85; }
+  94% { opacity: 1; }
+}
+
+@keyframes data-stream {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 0% 100%; }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
