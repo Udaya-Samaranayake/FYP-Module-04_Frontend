@@ -135,11 +135,27 @@ export default function App() {
     setLoading3(true);
     try {
       const data = await findRootCauseFunction(cveId);
+
+      // Debug: inspect the raw response shape from the backend
+      console.log('Phase 3 Success Data:', data);
+
       setPhase3Data(data);
       setActiveMode('phase3');
-      // Auto-populate Target Node ID with the extracted signature
-      if (data?.vulnerable_signature) {
-        setTargetNode(data.vulnerable_signature);
+
+      // Backend returns { signature: string, confidence: number }
+      // Fall back to other possible keys in case the backend schema changes.
+      const extracted =
+        data?.signature ||
+        data?.vulnerable_signature ||
+        data?.matched_node ||
+        data?.function_name ||
+        null;
+
+      if (extracted) {
+        setTargetNode(extracted);
+      } else {
+        console.warn('Phase 3: No recognisable signature key found in response.', data);
+        setError('Phase 3 succeeded but no function signature was returned. Check the console for the raw response.');
       }
     } catch (e) {
       setError(e.message);
@@ -378,7 +394,7 @@ export default function App() {
               />
 
               {/* Auto-fill indicator */}
-              {phase3Data?.vulnerable_signature && (
+              {(phase3Data?.signature || phase3Data?.vulnerable_signature) && (
                 <div style={{
                   marginTop: 8,
                   padding: '6px 8px',
@@ -391,9 +407,11 @@ export default function App() {
                 }}>
                   <ArrowDownToLine size={10} color="#00d4ff" style={{ marginTop: 1, flexShrink: 0 }} />
                   <div>
-                    <div style={{ fontSize: 8, color: '#00d4ff', fontFamily: 'monospace', letterSpacing: 1, marginBottom: 2 }}>AUTO-FILLED ↓</div>
+                    <div style={{ fontSize: 8, color: '#00d4ff', fontFamily: 'monospace', letterSpacing: 1, marginBottom: 2 }}>
+                      AUTO-FILLED ↓ {phase3Data.confidence != null ? `(confidence: ${(phase3Data.confidence * 100).toFixed(1)}%)` : ''}
+                    </div>
                     <div style={{ fontSize: 10, color: '#94a3b8', fontFamily: "'JetBrains Mono',monospace", wordBreak: 'break-all' }}>
-                      {phase3Data.vulnerable_signature}
+                      {phase3Data.signature || phase3Data.vulnerable_signature}
                     </div>
                   </div>
                 </div>
@@ -417,7 +435,7 @@ export default function App() {
                     width: '100%',
                     padding: '9px 10px 9px 28px',
                     background: '#030712',
-                    border: `1px solid ${phase3Data?.vulnerable_signature ? 'rgba(0,212,255,0.4)' : '#1e3a5f'}`,
+                    border: `1px solid ${(phase3Data?.signature || phase3Data?.vulnerable_signature) ? 'rgba(0,212,255,0.4)' : '#1e3a5f'}`,
                     borderRadius: 7,
                     color: '#e2e8f0',
                     fontSize: 12,
@@ -427,7 +445,7 @@ export default function App() {
                     transition: 'border-color 0.2s',
                   }}
                   onFocus={e => e.target.style.borderColor = '#00ff88'}
-                  onBlur={e => e.target.style.borderColor = phase3Data?.vulnerable_signature ? 'rgba(0,212,255,0.4)' : '#1e3a5f'}
+                  onBlur={e => e.target.style.borderColor = (phase3Data?.signature || phase3Data?.vulnerable_signature) ? 'rgba(0,212,255,0.4)' : '#1e3a5f'}
                 />
               </div>
             </div>
