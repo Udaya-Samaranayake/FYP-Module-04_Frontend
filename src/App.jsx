@@ -123,6 +123,7 @@ export default function App() {
   const [phase3Data, setPhase3Data] = useState(null);
   const [phase4Data, setPhase4Data] = useState(null);
   const [phase5Data, setPhase5Data] = useState(null);
+  const [phase4ReachableSnapshot, setPhase4ReachableSnapshot] = useState(null); // persists across Phase 5 run
   const [activeMode, setActiveMode] = useState(null); // 'phase3' | 'phase4' | 'phase5'
   const [loading3, setLoading3] = useState(false);
   const [loading4, setLoading4] = useState(false);
@@ -170,7 +171,37 @@ export default function App() {
     setLoading4(true);
     try {
       const data = await runReachability(targetNode);
-      setPhase4Data(data);
+
+      // ── Normalise the backend response ────────────────────────────────────
+      // Backend returns: { attack_path: string[], full_graph: { nodes, edges } }
+      // It does NOT include `is_reachable`, `target_node`, or `status`.
+      // We derive them client-side so every downstream consumer is correct.
+      const attackPath  = data.attack_path ?? [];
+      const isReachable = attackPath.length > 0;
+      const entryPoint  = attackPath[0]  ?? null;          // e.g. 'publicRouter'
+      const targetSink  = attackPath.at(-1) ?? null;       // e.g. 'Log4jJNDIValidator'
+
+      console.log('[Phase 4] is_reachable  :', isReachable);
+      console.log('[Phase 4] entry_point   :', entryPoint);
+      console.log('[Phase 4] target_sink   :', targetSink);
+      console.log('[Phase 4] path_length   :', attackPath.length);
+      console.log('[Phase 4] path          :', attackPath);
+
+      const normalised = {
+        ...data,
+        is_reachable : isReachable,
+        target_node  : targetSink,
+        entry_point  : entryPoint,
+        status: isReachable
+          ? `Attack path confirmed — ${attackPath.length} hop${attackPath.length !== 1 ? 's' : ''} via ${entryPoint}`
+          : 'No path to a public entry point found',
+      };
+
+      // Snapshot reachability immediately so Phase 5's severity formula can
+      // read it even after phase4Data is cleared when the blast graph renders.
+      setPhase4ReachableSnapshot(isReachable);
+
+      setPhase4Data(normalised);
       setPhase5Data(null);
       setActiveMode('phase4');
     } catch (e) {
@@ -186,8 +217,13 @@ export default function App() {
     setLoading5(true);
     try {
       const data = await calculateBlastRadius(targetNode);
+      // Snapshot the Phase 4 reachability BEFORE clearing phase4Data from the graph,
+      // so the severity scoring logic can still read it.
+      if (phase4Data !== null) {
+        setPhase4ReachableSnapshot(phase4Data.is_reachable);
+      }
       setPhase5Data(data);
-      setPhase4Data(null);
+      setPhase4Data(null); // clear graph nodes; reachability context kept in snapshot
       setActiveMode('phase5');
     } catch (e) {
       setError(e.message);
@@ -201,28 +237,71 @@ export default function App() {
     setPhase3Data(null);
     setPhase4Data(null);
     setPhase5Data(null);
+    setPhase4ReachableSnapshot(null);
     setActiveMode(null);
     setError(null);
     setTargetNode('');
   };
 
-  // Derive metric values
-  const isReachable = phase4Data?.is_reachable;
-  const statusText  = phase4Data
-    ? (isReachable ? 'REACHABLE' : 'UNREACHABLE')
-    : phase5Data
-    ? phase5Data.severity_level
-    : null;
-  const statusColor = isReachable === true ? 'red' : isReachable === false ? 'green'
-    : phase5Data?.severity_level === 'CRITICAL' || phase5Data?.severity_level === 'HIGH' ? 'red'
-    : phase5Data?.severity_level === 'MEDIUM' ? 'yellow'
-    : phase5Data ? 'green' : 'gray';
+  // ── Derived metric values ──────────────────────────────────────────────
+  const isReachable      = phase4Data?.is_reachable;
+  const blastRadiusCount = phase5Data?.total_impacted_nodes ?? null;
 
-  const severityScore = phase5Data?.severity_score ?? null;
-  const scoreColor = severityScore > 7 ? 'red' : severityScore > 4 ? 'yellow' : severityScore !== null ? 'green' : 'gray';
+  // phase4WasReachable: true if the CURRENT phase4 result says reachable, OR
+  // if we captured a snapshot from a prior Phase 4 run before Phase 5 cleared it.
+  const phase4WasReachable = isReachable === true || phase4ReachableSnapshot === true;
 
-  const totalImpacted = phase5Data?.total_impacted_nodes
-    ?? (phase4Data?.attack_path?.length ?? null);
+  // Computed Severity Score:
+  //   • Base 7.5 if Phase 4 confirmed REACHABLE (critical by definition).
+  //   • +0.5 per downstream node found in Phase 5 blast radius.
+  //   • Capped at 10.0. Falls back to raw backend score if Phase 4 wasn't run.
+  const REACHABLE_BASE   = 7.5;
+  const BLAST_MODIFIER   = 0.5;
+  const MAX_SCORE        = 10.0;
+
+  const computedSeverityScore = (() => {
+    if (phase5Data !== null) {
+      if (phase4WasReachable) {
+        // Phase 5 ran after a confirmed REACHABLE Phase 4
+        const raw = REACHABLE_BASE + (blastRadiusCount ?? 0) * BLAST_MODIFIER;
+        return Math.min(raw, MAX_SCORE);
+      }
+      // Phase 5 ran standalone (no prior Phase 4) — use backend score as-is
+      return phase5Data.severity_score ?? null;
+    }
+    return null; // Phase 5 not run yet
+  })();
+
+  // Isolated threat: reachable but 0 downstream propagation
+  const isolatedThreat = phase5Data !== null && phase4WasReachable && blastRadiusCount === 0;
+
+  // Status text & color — driven by the COMPUTED score, not the raw backend string
+  const statusText = (() => {
+    if (phase4Data) return isReachable ? 'REACHABLE' : 'UNREACHABLE';
+    if (phase5Data) {
+      if (computedSeverityScore >= 9.0) return 'CRITICAL';
+      if (computedSeverityScore >= 7.0) return 'HIGH';
+      if (computedSeverityScore >= 4.0) return 'MEDIUM';
+      return 'LOW';
+    }
+    return null;
+  })();
+
+  const statusColor = (() => {
+    if (phase4Data) return isReachable ? 'red' : 'green';
+    if (computedSeverityScore !== null) {
+      if (computedSeverityScore >= 7.0) return 'red';
+      if (computedSeverityScore >= 4.0) return 'yellow';
+      return 'green';
+    }
+    return 'gray';
+  })();
+
+  const scoreColor = computedSeverityScore !== null
+    ? (computedSeverityScore >= 7.0 ? 'red' : computedSeverityScore >= 4.0 ? 'yellow' : 'green')
+    : 'gray';
+
+  const totalImpacted = phase4Data?.attack_path?.length ?? null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#030712', overflow: 'hidden' }}>
@@ -290,27 +369,64 @@ export default function App() {
         display: 'flex', gap: 12, padding: '10px 16px 0',
         flexShrink: 0, alignItems: 'stretch',
       }}>
+        {/* STATUS CARD — score-driven, never downgrades to LOW if reachable */}
         <MetricCard
           icon={statusText ? (isReachable ? XCircle : CheckCircle) : Activity}
           label="Status"
           value={statusText}
-          sub={phase4Data?.status || (phase5Data ? `Severity: ${phase5Data.severity_level}` : 'Awaiting analysis')}
+          sub={
+            phase4Data?.status ||
+            (phase5Data
+              ? (computedSeverityScore >= 7.0
+                  ? '🔴 High-severity threat confirmed'
+                  : `Computed score: ${computedSeverityScore?.toFixed(1)}`)
+              : 'Awaiting analysis')
+          }
           color={statusColor}
         />
+
+        {/* SEVERITY SCORE — computed with reachable base + blast modifier */}
         <MetricCard
           icon={AlertTriangle}
           label="Severity Score"
-          value={severityScore !== null ? `${severityScore} / 10` : null}
-          sub={severityScore > 7 ? '🔴 Critical threshold exceeded' : severityScore !== null ? '🟡 Within bounds' : 'Run Phase 5'}
+          value={computedSeverityScore !== null ? `${computedSeverityScore.toFixed(1)} / 10` : null}
+          sub={
+            isolatedThreat
+              ? '⚠ Isolated Threat — Initial Compromise Only'
+              : computedSeverityScore >= 9.0
+              ? '🔴 Critical threshold exceeded'
+              : computedSeverityScore >= 7.0
+              ? '🔴 High severity — immediate action required'
+              : computedSeverityScore !== null
+              ? '🟡 Within moderate bounds'
+              : 'Run Phase 5 for score'
+          }
           color={scoreColor}
         />
+
+        {/* DOWNSTREAM IMPACT — Phase 5 blast radius (separate from attack path) */}
         <MetricCard
-          icon={Network}
-          label="Total Impacted Nodes"
-          value={totalImpacted !== null ? totalImpacted : null}
-          sub={activeMode === 'phase4' ? 'Nodes in attack path' : activeMode === 'phase5' ? 'Downstream functions affected' : 'Run an analysis'}
-          color={totalImpacted > 0 ? 'blue' : 'gray'}
+          icon={Zap}
+          label="Downstream Impact"
+          value={
+            blastRadiusCount !== null
+              ? `${blastRadiusCount} Node${blastRadiusCount !== 1 ? 's' : ''}`
+              : totalImpacted !== null
+              ? `${totalImpacted} Node${totalImpacted !== 1 ? 's' : ''}`
+              : null
+          }
+          sub={
+            blastRadiusCount !== null
+              ? (blastRadiusCount === 0
+                  ? 'No downstream propagation detected'
+                  : 'Downstream functions affected')
+              : totalImpacted !== null
+              ? 'Nodes in attack path'
+              : 'Run an analysis'
+          }
+          color={blastRadiusCount > 0 ? 'red' : blastRadiusCount === 0 ? 'yellow' : totalImpacted > 0 ? 'blue' : 'gray'}
         />
+
         <MetricCard
           icon={Target}
           label="Target Node"
@@ -511,9 +627,45 @@ export default function App() {
                   {phase5Data && (
                     <>
                       <LogRow label="Root Cause" value={phase5Data.root_cause_function} valueColor="#ff2d55" />
-                      <LogRow label="Severity" value={`${phase5Data.severity_score} / 10`} valueColor={phase5Data.severity_score > 7 ? '#ff2d55' : '#ffd700'} />
-                      <LogRow label="Level" value={phase5Data.severity_level} valueColor="#ffd700" />
-                      <LogRow label="Impacted" value={phase5Data.total_impacted_nodes} valueColor="#00d4ff" />
+                      <LogRow
+                        label="Computed Score"
+                        value={computedSeverityScore !== null ? `${computedSeverityScore.toFixed(1)} / 10` : '—'}
+                        valueColor={computedSeverityScore >= 7.0 ? '#ff2d55' : '#ffd700'}
+                      />
+                      <LogRow
+                        label="Status"
+                        value={
+                          isolatedThreat
+                            ? 'ISOLATED THREAT'
+                            : computedSeverityScore >= 9.0
+                            ? 'CRITICAL'
+                            : computedSeverityScore >= 7.0
+                            ? 'HIGH'
+                            : 'MEDIUM'
+                        }
+                        valueColor={computedSeverityScore >= 7.0 ? '#ff2d55' : '#ffd700'}
+                      />
+                      <LogRow
+                        label="Downstream"
+                        value={`${blastRadiusCount ?? 0} node${blastRadiusCount !== 1 ? 's' : ''} affected`}
+                        valueColor={blastRadiusCount > 0 ? '#ff2d55' : '#64748b'}
+                      />
+                      {isolatedThreat && (
+                        <div style={{
+                          marginTop: 6,
+                          padding: '6px 8px',
+                          background: 'rgba(255,215,0,0.07)',
+                          border: '1px solid rgba(255,215,0,0.25)',
+                          borderRadius: 5,
+                          fontSize: 9,
+                          color: '#ffd700',
+                          fontFamily: 'monospace',
+                          lineHeight: 1.5,
+                          letterSpacing: 0.5,
+                        }}>
+                          ⚠ Initial compromise confirmed. No lateral propagation detected, but the entry point itself is a HIGH-severity vulnerability.
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
